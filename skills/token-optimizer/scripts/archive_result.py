@@ -30,6 +30,34 @@ from pathlib import Path
 
 CHARS_PER_TOKEN = 4.0
 _ARCHIVE_THRESHOLD = 4096       # chars: only archive results >= this size
+
+# Compiled secret patterns — matched strings are replaced with [REDACTED] before archiving.
+# Covers the most common credential formats; does not scan for generic high-entropy strings
+# to avoid false positives in code output.
+_SECRET_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r'sk-ant-[A-Za-z0-9\-_]{20,}'),           # Anthropic
+    re.compile(r'sk-[A-Za-z0-9]{20,}'),                   # OpenAI
+    re.compile(r'AKIA[0-9A-Z]{16}'),                      # AWS access key ID
+    re.compile(r'(?i)(aws_secret_access_key\s*[=:]\s*)[A-Za-z0-9/+]{40}'),  # AWS secret
+    re.compile(r'ghp_[A-Za-z0-9]{36}'),                   # GitHub PAT classic
+    re.compile(r'ghs_[A-Za-z0-9]{36}'),                   # GitHub actions token
+    re.compile(r'github_pat_[A-Za-z0-9_]{82}'),           # GitHub fine-grained PAT
+    re.compile(r'AIza[0-9A-Za-z\-_]{35}'),                # Google API key
+    re.compile(r'(?i)(bearer\s+)[A-Za-z0-9\-._~+/]{20,}=*'),  # Bearer tokens
+    re.compile(r'xoxb-[0-9A-Za-z\-]{40,}'),               # Slack bot token
+    re.compile(r'xoxp-[0-9A-Za-z\-]{40,}'),               # Slack user token
+]
+
+
+def _scrub_secrets(text: str) -> str:
+    """Replace known secret patterns with [REDACTED] before archiving to disk."""
+    for pattern in _SECRET_PATTERNS:
+        # For patterns with a capture group (prefix), preserve the prefix
+        if pattern.groups:
+            text = pattern.sub(lambda m: m.group(1) + '[REDACTED]', text)
+        else:
+            text = pattern.sub('[REDACTED]', text)
+    return text
 _ARCHIVE_PREVIEW_SIZE = 1000    # chars: preview included in replacement output
 _ARCHIVE_MAX_SIZE = 5_242_880   # 5MB: truncate responses beyond this
 _STDIN_MAX_BYTES = 1_048_576    # 1MB: cap stdin reads
@@ -128,6 +156,9 @@ def archive_result(quiet: bool = False) -> None:
     # chars = content size before truncation marker (consistent metric)
     char_count = _ARCHIVE_MAX_SIZE if truncated else original_char_count
     token_est = int(char_count / CHARS_PER_TOKEN)
+
+    # Scrub secrets before writing to disk
+    tool_response = _scrub_secrets(tool_response)
 
     # Save full result with 0o600 permissions
     entry_data = {

@@ -23,6 +23,8 @@ find_interpreter() {
             case "$binpath" in
                 */WindowsApps/*|*/windowsapps/*) continue ;;
             esac
+            # Skip shim wrappers that exit non-zero (e.g. modern-python plugin shim)
+            "$binpath" -c "import sys" >/dev/null 2>&1 || continue
             printf "%s\n" "$binpath"
             return 0
         done

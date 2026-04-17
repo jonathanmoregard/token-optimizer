@@ -172,7 +172,11 @@ process.stdin.on('end', () => {
     }
 
     const dirname = path.basename(dir);
-    process.stdout.write(`${DIM}${model}${RESET}${effort}${SEP}${DIM}${dirname}${RESET}${ctx}${qScore}${duration}${sessionInfo}${agents}`);
+    const DIR_COLORS = ['\x1b[36m','\x1b[32m','\x1b[33m','\x1b[35m','\x1b[34m','\x1b[91m','\x1b[92m','\x1b[93m','\x1b[94m','\x1b[95m','\x1b[96m','\x1b[31m'];
+    let dirHash = 5381;
+    for (let i = 0; i < dir.length; i++) dirHash = ((dirHash << 5) + dirHash) ^ dir.charCodeAt(i);
+    const dirColor = dirname === '.claude' ? '\x1b[38;5;208m' : DIR_COLORS[Math.abs(dirHash) % DIR_COLORS.length];
+    process.stdout.write(`${DIM}${model}${RESET}${effort}${SEP}${dirColor}${dirname}${RESET}${ctx}${qScore}${duration}${sessionInfo}${agents}`);
   } catch (e) {
     // Silent fail - never break the status line
   }

@@ -2177,21 +2177,21 @@ var DB = (function() {
       env_var: 'TOKEN_OPTIMIZER_READ_CACHE_DELTA'
     },
     structure_map_beta: {
-      default: false, recommended: false, impact_pct: 0, risk_level: 'none',
-      label: 'Structure Map Beta (Local Measurement)',
-      what: "Tracks when the structure map feature fires on your machine so YOU can measure if it's helping.",
-      value: "Writes local-only SQLite rows so you can check `measure.py compression-stats` later. Nothing sent anywhere. Helps you prove (or disprove) whether structure maps help on your code-heavy sessions.",
-      how: "Writes one row to your local SQLite (~/.claude/_backups/token-optimizer/trends.db) when a code file is read multiple times and gets replaced with a function/class summary. Zero network calls. You can sqlite3 the file or delete it anytime.",
-      risk: "None. Local SQLite writes only, no external connections. Ever.",
+      default: false, recommended: true, impact_pct: 30, risk_level: 'low',
+      label: 'Structure Map Measurement',
+      what: "Logs compression events when structure map fires, so you can track actual savings via compression-stats.",
+      value: "Structure Map itself is always ON (soft-block mode). This flag enables local measurement logging so you can see the actual token savings per file. A 180K-token file re-read becomes 250 tokens.",
+      how: "Writes one row to your local SQLite when a code file re-read gets replaced with a function/class summary. The substitution runs regardless of this flag. This only controls whether savings events are recorded. Zero network calls.",
+      risk: "None. Local SQLite writes only. The actual substitution is controlled by the read-cache mode, not this flag.",
       env_var: 'TOKEN_OPTIMIZER_STRUCTURE_MAP'
     },
     bash_compress: {
-      default: false, recommended: false, impact_pct: 10, risk_level: 'moderate',
+      default: true, recommended: true, impact_pct: 10, risk_level: 'low',
       label: 'Bash Output Compression',
       what: "Rewrites 'git status', 'pytest', 'npm install' etc. to return compressed summaries instead of verbose output.",
       value: "Strips hundreds of lines of test/build/git output down to just the essentials. Best for sessions with lots of CLI commands.",
       how: "A PreToolUse hook intercepts safe read-only commands and routes them through a compression wrapper. Only whitelisted commands (git status/log/diff, pytest, jest, npm install, ls) are touched. Compound commands (anything with &&, ;, |, $()) are never touched.",
-      risk: "Moderate. Compression is lossy by design: 'git diff' truncates to 30 lines on large diffs, 'pytest' shows pass/fail counts but strips individual passing tests, 'git log' drops merge commit details. For routine checks this is fine. For careful diff review or debugging specific test failures, it could hide information. OFF by default -- opt-in only.",
+      risk: "Low. Compression is lossy by design: 'git diff' truncates to 30 lines on large diffs, 'pytest' shows pass/fail counts but strips individual passing tests, 'git log' drops merge commit details. For routine checks this is fine. For careful diff review or debugging specific test failures, set TOKEN_OPTIMIZER_BASH_COMPRESS=0 to disable temporarily.",
       env_var: 'TOKEN_OPTIMIZER_BASH_COMPRESS'
     }
   };
@@ -3327,6 +3327,40 @@ var DB = (function() {
       html += '</div></div>';
     }
 
+    // Rolling quality trend (from trends DB)
+    var qt = (data.trends && data.trends.quality_trend) || [];
+    if (qt.length >= 2) {
+      var last7 = qt.slice(-7);
+      var maxQ = 100, minQ = 0;
+      var chartW = 600, chartH = 120, pad = 30;
+      var stepX = (chartW - pad * 2) / Math.max(1, last7.length - 1);
+      var scaleY = function(v) { return chartH - pad - ((v - minQ) / (maxQ - minQ)) * (chartH - pad * 2); };
+
+      var avgPath = last7.map(function(p, i) { return (i === 0 ? 'M' : 'L') + (pad + i * stepX) + ',' + scaleY(p.avg_quality); }).join(' ');
+      var minPath = last7.map(function(p, i) { return (i === 0 ? 'M' : 'L') + (pad + i * stepX) + ',' + scaleY(p.min_quality); }).join(' ');
+
+      var latestAvg = last7[last7.length - 1].avg_quality;
+      var trendColor = latestAvg >= 80 ? 'var(--c-accent-cyan)' : latestAvg >= 60 ? '#4ecdc4' : latestAvg >= 50 ? '#ff9f43' : '#ff6b6b';
+
+      html += '<div class="card wide"><div class="card-header"><span>Quality Trend</span><span class="label">' + last7.length + '-day</span></div>' +
+        '<div style="padding:var(--s-2) var(--s-3);font-size:12px;color:var(--c-text-dim);">Rolling daily average quality score across sessions. Dashed line shows daily minimum.</div>' +
+        '<div style="padding:0 var(--s-3) var(--s-3);overflow-x:auto;">' +
+        '<svg viewBox="0 0 ' + chartW + ' ' + chartH + '" style="width:100%;max-width:' + chartW + 'px;height:auto;">' +
+        '<line x1="' + pad + '" y1="' + scaleY(80) + '" x2="' + (chartW - pad) + '" y2="' + scaleY(80) + '" stroke="var(--c-border)" stroke-dasharray="4,4" stroke-width="1" />' +
+        '<text x="' + (chartW - pad + 4) + '" y="' + (scaleY(80) + 4) + '" fill="var(--c-text-dim)" font-size="10" font-family="var(--font-mono)">80</text>' +
+        '<line x1="' + pad + '" y1="' + scaleY(60) + '" x2="' + (chartW - pad) + '" y2="' + scaleY(60) + '" stroke="var(--c-border)" stroke-dasharray="4,4" stroke-width="1" />' +
+        '<text x="' + (chartW - pad + 4) + '" y="' + (scaleY(60) + 4) + '" fill="var(--c-text-dim)" font-size="10" font-family="var(--font-mono)">60</text>' +
+        '<path d="' + minPath + '" fill="none" stroke="#ff6b6b" stroke-width="1.5" stroke-dasharray="3,3" opacity="0.5" />' +
+        '<path d="' + avgPath + '" fill="none" stroke="' + trendColor + '" stroke-width="2.5" />';
+      last7.forEach(function(p, i) {
+        var cx = pad + i * stepX, cy = scaleY(p.avg_quality);
+        html += '<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="' + trendColor + '" stroke="var(--c-bg)" stroke-width="2">' +
+          '<title>' + esc(p.date) + ': avg ' + p.avg_quality + ', min ' + p.min_quality + ', max ' + p.max_quality + ' (' + p.sessions + ' sessions)</title></circle>';
+        html += '<text x="' + cx + '" y="' + (chartH - 6) + '" fill="var(--c-text-dim)" font-size="9" font-family="var(--font-mono)" text-anchor="middle">' + p.date.slice(5) + '</text>';
+      });
+      html += '</svg></div></div>';
+    }
+
     // Recommendations
     var recs = h.recommendations || [];
     if (recs.length > 0) {
@@ -3935,9 +3969,23 @@ var DB = (function() {
         .then(function(resp) {
           if (row) row.style.opacity = '1';
           if (resp.ok) {
-            // Update local data and re-render
-            if (data.manage && resp.v5_features) {
-              data.manage.v5_features = resp.v5_features;
+            // Merge the enabled flags from resp.v5_features into the local
+            // data without dropping the render-time metadata (label,
+            // risk_level, desc, etc.). The daemon's response only carries
+            // {enabled: bool} per feature — a full replace would strip the
+            // descriptive fields that renderManage needs and trigger a
+            // TypeError inside esc(f.label). Fall back to flipping the
+            // single feature the user toggled if no v5_features came back.
+            if (data.manage && data.manage.v5_features) {
+              if (resp.v5_features) {
+                Object.keys(resp.v5_features).forEach(function(k) {
+                  if (data.manage.v5_features[k] && typeof resp.v5_features[k] === 'object' && resp.v5_features[k] !== null) {
+                    data.manage.v5_features[k].enabled = !!resp.v5_features[k].enabled;
+                  }
+                });
+              } else if (data.manage.v5_features[fname]) {
+                data.manage.v5_features[fname].enabled = newState;
+              }
             }
             renderManage();
             // Toast

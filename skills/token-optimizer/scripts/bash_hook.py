@@ -9,7 +9,7 @@ Exit behavior:
 - JSON output = rewrite command via updatedInput
 - Any error = exit silently (fail open)
 
-Controlled by: TOKEN_OPTIMIZER_BASH_COMPRESS=1 (default: OFF)
+Controlled by: TOKEN_OPTIMIZER_BASH_COMPRESS=0 to disable (default: ON)
 """
 
 import json
@@ -18,6 +18,8 @@ import shlex
 import sys
 import time
 from pathlib import Path
+
+from plugin_env import is_v5_flag_enabled, resolve_plugin_data_dir
 
 # Categorical exclusion: if ANY of these appear in the raw command string,
 # never rewrite. Checked BEFORE shlex tokenization to catch all forms.
@@ -45,6 +47,8 @@ _WHITELIST_SINGLE = frozenset({
     "tsc", "webpack", "esbuild",
     # v5.1 extended test runners (read-only test execution)
     "mocha", "karma",
+    # v5.5 read-only utilities
+    "sqlite3", "wc", "du", "df",
 })
 _WHITELIST_COMPOUND = {
     ("git", "status"), ("git", "log"), ("git", "diff"), ("git", "show"), ("git", "branch"),
@@ -78,6 +82,12 @@ _WHITELIST_COMPOUND = {
     ("npx", "playwright"),
     ("npx", "mocha"),
     ("npx", "karma"),
+    # v5.5 docker/kubectl read-only inspection
+    ("docker", "logs"),
+    ("docker", "inspect"),
+    ("kubectl", "get"),
+    ("kubectl", "describe"),
+    ("kubectl", "logs"),
 }
 
 # Git write commands that should NOT be compressed
@@ -123,46 +133,40 @@ def _is_whitelisted(command_str):
 
     # Check compound whitelist first (more specific)
     if (cmd, subcmd) in _WHITELIST_COMPOUND:
-        # Special case: git write commands
         if cmd == "git" and subcmd in _GIT_WRITE_SUBCMDS:
             return False
+        if cmd == "kubectl":
+            remaining = tokens[cmd_start + 2:]
+            if any(arg == "secret" or arg == "secrets" or arg.startswith("secret/") or arg.startswith("secrets/") for arg in remaining):
+                return False
         return True
 
     # Check single command whitelist
     if cmd in _WHITELIST_SINGLE:
-        # For git, only allow read-only subcommands
         if cmd == "git":
             if subcmd in _GIT_WRITE_SUBCMDS or not subcmd:
                 return False
-            # Only whitelist known read subcommands
             if subcmd not in ("status", "log", "diff", "show", "branch"):
+                return False
+        if cmd == "sqlite3":
+            cmd_lower = command_str.lower()
+            if any(w in cmd_lower for w in ("insert", "update", "delete", "drop", "alter", "create")):
+                return False
+            remaining = tokens[cmd_start + 1:]
+            if any(t.startswith(".") for t in remaining):
                 return False
         return True
 
-    # Check for sudo/su prefix (never rewrite)
-    if cmd in ("sudo", "su"):
+    # Never rewrite shell interpreters or privilege-escalation wrappers (also prevents recursion on rewritten commands).
+    if cmd in ("bash", "sh", "zsh", "dash", "fish", "sudo", "su"):
         return False
 
     return False
 
 
 def _is_bash_compress_enabled():
-    """Check if bash compression is enabled. Env var > config.json > default (False)."""
-    env_val = os.environ.get("TOKEN_OPTIMIZER_BASH_COMPRESS")
-    if env_val is not None:
-        return env_val == "1"
-    try:
-        config_dir = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".claude" / "token-optimizer"))) / "config"
-        if not config_dir.exists():
-            config_dir = Path.home() / ".claude" / "token-optimizer"
-        config_path = config_dir / "config.json"
-        if config_path.exists():
-            cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            if isinstance(cfg, dict) and "v5_bash_compress" in cfg:
-                return bool(cfg["v5_bash_compress"])
-    except (json.JSONDecodeError, OSError):
-        pass
-    return False  # Default: OFF
+    """Check if bash compression is enabled. Default ON since v5.5."""
+    return is_v5_flag_enabled("v5_bash_compress", "TOKEN_OPTIMIZER_BASH_COMPRESS", default=True)
 
 
 def main():
@@ -197,6 +201,12 @@ def main():
     if not compress_path.exists():
         return  # Wrapper missing, exit silently
 
+    # Route through python-launcher.sh so Windows Store shim / py launcher are handled.
+    plugin_root = script_dir.parent.parent.parent
+    launcher_path = plugin_root / "hooks" / "python-launcher.sh"
+    if not launcher_path.exists():
+        return  # Launcher missing, exit silently
+
     # Build rewritten command with proper quoting for each token
     try:
         original_tokens = shlex.split(command)
@@ -204,11 +214,15 @@ def main():
         return
 
     # Re-quote each token to handle paths with spaces safely (ARCH-F3)
-    rewritten = "python3 " + shlex.quote(str(compress_path)) + " " + " ".join(shlex.quote(t) for t in original_tokens)
+    rewritten = (
+        "bash " + shlex.quote(str(launcher_path))
+        + " " + shlex.quote(str(compress_path))
+        + " " + " ".join(shlex.quote(t) for t in original_tokens)
+    )
 
     # Log rewrite event to sidecar JSONL
     try:
-        log_dir = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".claude" / "token-optimizer")))
+        log_dir = resolve_plugin_data_dir() or (Path.home() / ".claude" / "token-optimizer")
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "bash-rewrites.jsonl"
         event = json.dumps({
@@ -225,6 +239,7 @@ def main():
     # Emit updatedInput response
     response = {
         "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
             "updatedInput": {
                 "command": rewritten,

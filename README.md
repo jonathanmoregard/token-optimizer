@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.4.17-green" alt="Version 5.4.17"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.6.2-green" alt="Version 5.6.2"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.3.0-brightgreen" alt="OpenClaw v2.3.0"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.4.0-brightgreen" alt="OpenClaw v2.4.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://img.shields.io/github/last-commit/alexgreensh/token-optimizer" alt="Last Commit"></a>
@@ -51,17 +51,8 @@ Then in Claude Code: `/token-optimizer`
 
 > **Please enable auto-update after installing.** Claude Code ships third-party marketplaces with auto-update **off by default**, and plugin authors cannot change that default. So you won't get bug fixes automatically unless you turn it on. In Claude Code: `/plugin` → **Marketplaces** tab → select `alexgreensh-token-optimizer` → **Enable auto-update**. One-time, 10 seconds, and you'll never miss a fix again. Token Optimizer also prints a one-time reminder on your first SessionStart so you don't forget.
 
-### Seeing `Unknown skill: plugin`?
-
-That means your Claude Code is out of date. The `/plugin` command was added in a recent Claude Code release. Update first:
-
-- **Homebrew**: `brew upgrade claude-code`
-- **npm**: `npm update -g @anthropic-ai/claude-code`
-- **Native installer**: re-run the install command from [claude.com/product/claude-code](https://claude.com/product/claude-code)
-
-Then restart Claude Code and re-run the two `/plugin` commands above.
-
-### Windows users: read this first
+<details>
+<summary><h3>Windows users: read this first</h3></summary>
 
 The plugin install above is the **only** path you should use on Windows. Do **not** also run the `install.sh` script described below — that's a bash installer for macOS/Linux/WSL, and combining the two creates an `EBUSY: resource busy or locked` error because Git Bash holds Windows file handles open while the plugin system is trying to clone.
 
@@ -79,7 +70,10 @@ If you've already hit the EBUSY error:
 
 **Manual ZIP fallback** (if plugin install repeatedly fails): download [the repo ZIP](https://github.com/alexgreensh/token-optimizer/archive/refs/heads/main.zip) (~800 KB), extract to `C:\Users\<you>\.claude\token-optimizer\`, then run `python measure.py setup-quality-bar` from that directory. Note: on Windows the command is `python`, not `python3`.
 
-### macOS / Linux only: script install (alternative)
+</details>
+
+<details>
+<summary><h3>macOS / Linux only: script install (alternative)</h3></summary>
 
 If you prefer a script-managed install on macOS or Linux, this works too and auto-updates daily via `git pull --ff-only`. **Do not run this on Windows, and do not run it alongside the plugin install above on any platform.** Pick one method.
 
@@ -90,13 +84,15 @@ bash ~/.claude/token-optimizer/install.sh
 
 Works on Claude Code and [OpenClaw](#openclaw-plugin). Each platform has its own native plugin (Python for Claude Code, TypeScript for OpenClaw). No bridging, no shared runtime, zero cross-platform dependencies.
 
+</details>
+
 ---
 
 ## Full Visibility: See Every Token, Every Dollar, Every Turn
 
 Most tools tell you your context is full. Token Optimizer shows you exactly where every token went, how much each turn cost, which skills and MCP servers actually fired, and which ones are just sitting there eating your budget.
 
-![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-overview.png)
+![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-demo.gif)
 
 One single-file HTML dashboard. Auto-regenerates after every session via the SessionEnd hook. Bookmark `http://localhost:24842/token-optimizer` and it's always current. Zero tokens from your context, zero network calls, zero setup after install.
 
@@ -171,7 +167,7 @@ Lighter users see proportional savings. Structural audit wins (unused skills, du
 <details>
 <summary>🎯 <strong>Can Token Optimizer degrade my context quality?</strong></summary>
 
-No. Structural optimization only removes genuinely unused components (skills you never invoke, duplicate configs, orphaned memory entries). Active Compression features are independently toggleable, and the lossy ones (like Bash Compression) are OFF by default. The 7-signal quality score actively tracks degradation, so if anything ever hurt quality, the score would show it.
+No. Structural optimization only removes genuinely unused components (skills you never invoke, duplicate configs, orphaned memory entries). Active Compression features are independently toggleable, and the lossy ones (like Bash Compression) can be disabled with a single command or env var. The 7-signal quality score actively tracks degradation, so if anything ever hurt quality, the score would show it.
 </details>
 
 <details>
@@ -196,7 +192,7 @@ No network calls. No analytics. No opt-out telemetry because there's nothing to 
 <details>
 <summary>🛟 <strong>Can it hurt my session?</strong></summary>
 
-No. All hooks are non-blocking with fail-open design. If a Token Optimizer script ever errors, your command runs normally. Compression is opt-in. Checkpoints are additive. Quality scoring is read-only measurement.
+No. All hooks are non-blocking with fail-open design. If a Token Optimizer script ever errors, your command runs normally. Compression features are all individually toggleable. Checkpoints are additive. Quality scoring is read-only measurement.
 </details>
 
 <details>
@@ -239,9 +235,9 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 
 When auto-compact fires, 60-70% of your conversation vanishes. Decisions, error-fix sequences, agent state, all gone.
 
-Smart Compaction catches all of it as checkpoints before compaction fires, then restores what the summary dropped. Sessions pick up where you left off, even after a crash or /clear. Checkpoint history and compaction loss per session are also visible on the dashboard.
+Smart Compaction catches all of it as checkpoints before compaction fires, then restores what the summary dropped. It also injects a digest of large tool outputs the model previously processed, so after compaction the model knows what it already saw without re-reading everything from scratch. Sessions pick up where you left off, even after a crash or /clear. Checkpoint history and compaction loss per session are also visible on the dashboard.
 
-Compression savings only stick if your session survives the compaction. Saving tokens on `git status` doesn't help if the next auto-compact wipes out the decision that made you run `git status` in the first place. Smart Compaction closes that loop.
+Compression savings only stick if your session survives the compaction. Saving tokens on `git status` doesn't help if the next auto-compact wipes out the decision that made you run `git status` in the first place. Smart Compaction closes that loop: checkpoint your decisions, restore them after compaction, and remind the model what outputs it already processed so it doesn't waste tokens re-reading them.
 
 ```bash
 python3 measure.py setup-smart-compact    # checkpoint + restore hooks
@@ -324,22 +320,23 @@ Real session. 708 messages, 2 compactions, 88% of the original context gone. Wit
 
 ## Active Compression (v5)
 
-Token Optimizer no longer just measures context bloat. It actively reduces it. Five features target specific waste patterns, each with honest risk assessment and dashboard toggles.
+Token Optimizer no longer just measures context bloat. It actively reduces it. Seven features target specific waste patterns, each with honest risk assessment and dashboard toggles.
 
 ![v5 Active Compression overview](skills/token-optimizer/assets/v5-hero.svg)
 
-**On by default**: Quality Nudges, Loop Detection, Delta Mode.
-**Opt-in**: Bash Compression (7 handlers as of v5.1.0) and Structure Map Beta.
+**On by default**: Quality Nudges, Loop Detection, Delta Mode, Structure Map, Bash Compression (16 handlers), Activity Mode Detection, Decision Extraction.
 
-All five features are independently toggleable from the Manage tab in the dashboard, via CLI (`measure.py v5 enable|disable <feature>`), or with environment variables.
+All features are independently toggleable from the Manage tab in the dashboard, via CLI (`measure.py v5 enable|disable <feature>`), or with environment variables.
 
 | Feature | Default | Potential Savings | Risk |
 |---|---|---|---|
-| Quality Nudges | ON | ~5% (prevented waste) | None |
-| Loop Detection | ON | ~8% (caught loops) | None |
+| Quality Nudges | ON | Measured per-compact (fill% recovery) | None |
+| Loop Detection | ON | Measured per-loop (actual turn content) | None |
 | Delta Mode | ON | ~20% (smart re-reads) | Low |
-| Structure Map Beta (local measurement) | OFF (opt-in) | Measurement only | None |
-| Bash Compression | OFF (opt-in) | ~10% (CLI output) | Moderate |
+| Structure Map | ON (soft-block) | ~30% (large file re-reads, up to 99% per file) | Low |
+| Bash Compression | ON | ~10% (CLI output) | Low |
+| Activity Mode | ON | Adapts compaction to session phase | None |
+| Decision Extraction | ON | Preserves decisions across compactions | None |
 
 > **Privacy note**: Every feature runs 100% on your machine. Nothing is ever sent anywhere. No analytics endpoint, no phone-home, no cloud sync. "Measurement" and "beta telemetry" always mean local-only SQLite writes to a file you own, and you can inspect, export, or delete that file at any time. Token Optimizer has zero network calls by design.
 
@@ -359,9 +356,9 @@ Claude sees that note on the next turn and surfaces the warning to you naturally
 
 ### Loop Detection (ON by default, fully automatic)
 
-Catches the AI getting stuck on a retry loop before it burns through tokens. When similarity crosses the threshold, a short inline note lands in the context flagging the loop so the model breaks out of it, with no user action needed. A single caught loop typically saves 10-50K tokens.
+Catches the AI getting stuck on a retry loop before it burns through tokens. When similarity crosses the threshold, a short inline note lands in the context flagging the loop so the model breaks out of it, with no user action needed. Savings are measured from the actual content of the looping turns, not estimated.
 
-**Value**: post-hoc detectors found that loop sessions average 47K wasted tokens. Real-time detection prevents this.
+**Value**: post-hoc detectors found that loop sessions average 47K wasted tokens. Real-time detection prevents this. Every caught loop logs the measured token cost of the loop turns to your local telemetry.
 
 **How it works**: compares the last 4 user messages and last 5 tool results for similarity. Fires at confidence ≥0.7 with a session cap of 2 notes. Uses fixed message templates and never echoes user content back.
 
@@ -379,21 +376,21 @@ When the AI re-reads a file after editing it, the Read call returns only what ch
 
 **Risk**: low. If the AI needed the full file to understand the change in context, the diff alone might not be enough. Fails open on large changes and big files. Set `TOKEN_OPTIMIZER_READ_CACHE_DELTA=0` to disable.
 
-### Structure Map Beta (local measurement only, OFF by default)
+### Structure Map (ON in soft-block mode, your biggest win on large files)
 
-Writes measurement events to your local SQLite database when a code file is read multiple times and gets replaced with a function/class summary. The feature itself already runs in `soft_block` mode. This flag just adds measurement so you can see if it actually helped on your sessions.
+When Claude re-reads a code file it already saw this session, the Read call is blocked and replaced with a compact structural summary: function signatures, class hierarchies, imports, and module docstrings. A 720KB Python file (180,000 tokens) becomes a 250-token skeleton. Works on Python files up to 800KB/20K lines and JS/TS files up to 400KB/5K lines.
 
-**Not cloud telemetry.** Nothing is sent anywhere. Events land in `~/.claude/_backups/token-optimizer/trends.db` on your machine only.
+**Value**: code-heavy sessions re-read the same large files 3-17 times. Structure Map compresses every re-read after the first by 95-99%. On a 180K-token file re-read 5 times, that's ~900K tokens saved in a single session.
 
-**Value**: helps you prove (or disprove) whether structure maps help on your code-heavy sessions. Run `measure.py compression-stats --days 30` after a few weeks to see.
+**How it works**: on first read, caches the file content and generates an AST-based summary (Python) or regex-based summary (JS/TS). On subsequent reads of the same unchanged file, returns the summary via `additionalContext` and blocks the full re-read. Falls back to full read on files below 1,000 tokens, generated/minified files, partial-range reads, or if the AST parse fails.
 
-**How to enable**: `measure.py v5 enable structure_map_beta` or `TOKEN_OPTIMIZER_STRUCTURE_MAP=beta`
+**Measurement**: enable `measure.py v5 enable structure_map_beta` or `TOKEN_OPTIMIZER_STRUCTURE_MAP=beta` to log compression events to your local SQLite for `compression-stats`. Nothing sent anywhere.
 
-**Risk**: none. Adds a local SQLite row per event. Nothing else.
+**Risk**: low. The model works from the summary instead of full source. For files where implementation details matter (not just structure), the model can request a full read. Disable with `TOKEN_OPTIMIZER_READ_CACHE_MODE=shadow`.
 
 ![Bash Output Compression: git status and pytest before/after](skills/token-optimizer/assets/v5-bash-compression.svg)
 
-### Bash Output Compression (OFF, opt-in, lossy)
+### Bash Output Compression (ON by default, lossy)
 
 Rewrites common CLI commands to return compressed summaries instead of verbose output. v5.1.0 ships seven new handlers covering the command families that eat the most context: lint (rule-code grouping for eslint, ruff, flake8, shellcheck, rubocop, golangci-lint), log tails (adjacent-duplicate collapse), tree (depth-2 truncation), docker build and pull (progress filtering), long listings (pip list, npm ls, docker ps, with top-N plus tail marker), JS/TS/Go build output (error-and-summary view), and test runner routing (cypress, playwright, mocha, karma all route through the unified pytest compressor).
 
@@ -405,9 +402,25 @@ Together with the existing git and pytest handlers, that's full coverage for ~90
 
 **Security**: `shell=True` is never used. Credentials (AWS keys, GitHub PATs, Slack tokens, Stripe keys, OpenAI keys, HTTP basic-auth URLs) are scanned pre-compression and preserved verbatim. Multilingual error lines survive the preservation path. Partial output on timeout is returned raw, never compressed.
 
-**How to enable**: `measure.py v5 enable bash_compress` or `TOKEN_OPTIMIZER_BASH_COMPRESS=1`
+**How to disable**: `measure.py v5 disable bash_compress` or `TOKEN_OPTIMIZER_BASH_COMPRESS=0`
 
-**Risk**: moderate. Compression is lossy by design. For routine checks this is fine. For careful diff review or debugging specific test failures, it could hide information. OFF by default, opt-in only.
+**Risk**: low. Compression is lossy by design. For routine checks this is fine. For careful diff review or debugging specific test failures, disable temporarily with the command above.
+
+### Activity Mode Detection (ON by default, v5.6)
+
+Classifies your session into one of five modes (code, debug, review, infra, general) using a sliding window of the last 10 tool calls. The mode label feeds into compaction guidance so PRESERVE/DROP priorities adapt to what you're actually doing: debug mode preserves error signals and stack traces, code mode preserves edited files and their tests, review mode keeps findings and decisions while dropping full file contents.
+
+**How it works**: the PostToolUse hook classifies each tool call into a bucket (edit, read, bash_infra, bash_git, web, etc.) and stores it in the per-session SQLite. Mode classification runs on every tool call with zero latency impact (single INSERT + bounded SELECT). The activity log auto-prunes at 30 rows.
+
+**Risk**: none. Mode detection is read-only context, never modifies or blocks anything.
+
+### Decision Extraction (ON by default, v5.6)
+
+Detects decision statements ("chose X because Y", "going with Z over W", "switched to") in real-time from tool outputs and stores them incrementally in the session database. At compaction time, these decisions are injected as CRITICAL DECISIONS that the compaction summary must preserve verbatim. Combined with the new anchored compact state (which persists intent, changes, decisions, and errors across compaction cycles), this prevents the decision drift that makes post-compaction sessions lose context.
+
+**How it works**: regex-based extraction on the PostToolUse path (runs only on outputs >500 chars). Uses atomic read-modify-write (SQLite BEGIN IMMEDIATE) to prevent lost updates under concurrent hooks. Capped at 10 decisions per session.
+
+**Risk**: none. Only adds structured data to the compaction guidance, never removes anything.
 
 ### Managing v5 features
 
@@ -428,7 +441,7 @@ python3 measure.py compression-stats            # see actual measured savings fr
 TOKEN_OPTIMIZER_QUALITY_NUDGES=0        # kill switch for nudges
 TOKEN_OPTIMIZER_LOOP_DETECTION=0        # kill switch for loop detection
 TOKEN_OPTIMIZER_READ_CACHE_DELTA=1      # enable delta mode
-TOKEN_OPTIMIZER_BASH_COMPRESS=1         # enable bash compression
+TOKEN_OPTIMIZER_BASH_COMPRESS=0         # disable bash compression
 TOKEN_OPTIMIZER_STRUCTURE_MAP=beta      # enable beta telemetry
 ```
 
@@ -490,7 +503,7 @@ Tell it your goal. Get back specific, prioritized fixes with exact token savings
 
 ### Waste Detectors
 
-9 automated detectors analyze your session patterns and surface actionable findings:
+11 automated detectors analyze your session patterns and surface actionable findings:
 
 | Detector | What it catches |
 |---|---|
@@ -503,6 +516,8 @@ Tell it your goal. Get back specific, prioritized fixes with exact token savings
 | Weak model | Haiku on complex tasks needing a stronger model |
 | Bad decomposition | Monolithic 500+ word prompts doing too much |
 | Wasteful thinking | Extended thinking >2x output for small edits |
+| Output waste | Verbose responses to simple operations, repeated explanations |
+| Cache instability | CLAUDE.md patterns that break Anthropic's prompt cache prefix |
 
 ### Fleet Auditor
 
@@ -566,11 +581,11 @@ Hover help on every column explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Ca
 |---|---|---|---|---|
 | Structural waste audit | Deep, per-component | Summary only | No | No |
 | Quality degradation tracking | 7-signal score with grades | Capacity % only | No | No |
-| Compaction survival | Progressive checkpoints plus restore | No | Session guide only | No |
-| Runtime output compression | 30+ CLI commands, credential-safe, opt-in where lossy | No | Yes | Yes, always-on (cannot disable) |
+| Compaction survival | Progressive checkpoints, restore, plus tool output digest | No | Session guide only | No |
+| Runtime output compression | 16 CLI handlers, credential-safe, individually toggleable | No | Yes | Yes, always-on (cannot disable) |
 | Measures if compression actually helped | Yes, local telemetry with before/after tokens | No | No | No |
 | Read deduplication and smart diff on re-reads | Yes | No | No | No |
-| Behavioral coaching and model routing | 9 detectors, cost-ranked subagent breakdown | Basic suggestions | No | No |
+| Behavioral coaching and model routing | 11 detectors, cost-ranked subagent breakdown | Basic suggestions | No | No |
 | CLAUDE.md and MEMORY.md structural health | 8 auditors plus attention-curve scoring | No | No | No |
 | Fleet-level waste detection across agents | Yes | No | No | No |
 | Zero context tokens consumed | Yes, external process | Adds ~200 tokens | MCP overhead | Injects instructions into context |
@@ -621,7 +636,7 @@ For contradiction detection (two rules saying opposite things), run the audit in
 
 ### PreToolUse Read-Cache (automatic deduplication)
 
-Detects redundant file reads automatically and, in warn mode, drops a short in-context note so Claude knows the file hasn't changed since the last read. In block mode, it returns a structural digest in place of the re-read and the model works off that. Default ON in warn mode. Saves 8-30% tokens from read deduplication across a typical session.
+Detects redundant file reads automatically. On the first re-read of an unchanged file, returns a structural code summary (function signatures, class hierarchy, imports) instead of the full source. A 180,000-token file re-read becomes a 250-token skeleton. Works on Python files up to 800KB and JS/TS files up to 400KB. Default ON in soft-block mode. Saves 8-30% tokens from read deduplication across a typical session, with 95%+ compression on large code files.
 
 ```bash
 # Read-cache is ON by default (warn mode). To disable:
@@ -748,7 +763,7 @@ Inside OpenClaw, run `/token-optimizer` for a guided audit with coaching.
 
 **Session audits and cost tracking.** Parses your OpenClaw session data, calculates per-turn costs against your configured pricing (falls back to built-in rates for 20+ models), surfaces costly prompts, and ranks subagents by spend so you can see which orchestrator-worker pairs are actually pulling their weight.
 
-**9 waste detectors native to OpenClaw.** Idle burn detection, model misrouting, unused skills, retry churn, tool cascades, looping patterns, overpowered model use, weak model on complex tasks, and wasteful thinking. Each finding comes with a dollar estimate.
+**10 waste detectors native to OpenClaw.** Idle burn detection, model misrouting, unused skills, retry churn, tool cascades, looping patterns, overpowered model use, weak model on complex tasks, wasteful thinking, and output token waste. Each finding comes with a dollar estimate.
 
 **Coach tab adapted for OpenClaw.** Scoring adapts to OpenClaw concepts (SOUL.md instead of CLAUDE.md, agent configs instead of hooks). Health score surfaces earned signals, neutral signals, and anti-patterns.
 
@@ -766,6 +781,24 @@ See [`openclaw/README.md`](openclaw/README.md) for full docs.
 
 ## License
 
-**PolyForm Noncommercial 1.0.0**. Free for personal, research, educational, and non-commercial use. Commercial use requires a separate license. Contact [Alex Greenshpun](https://linkedin.com/in/alexgreensh) for commercial licensing.
+**PolyForm Noncommercial 1.0.0**. Source-available. Personal, research, educational, and non-commercial use requires no license purchase.
+
+_This FAQ is informational guidance, not a modification of the license terms. Last updated: April 2026._
+
+### 🧑‍💻 Personal / hobby / research / education?
+Go for it. Full source, runs locally, no license purchase needed. That's the whole point.
+
+### 🏢 Small team (under 5 people OR under $20k/month revenue)?
+Small teams get a no-cost commercial license automatically. Just use it.
+If you want to [sponsor the project](https://github.com/sponsors/alexgreensh) or buy me a coffee, not required, but always appreciated ☕
+
+### 🔄 Started personal, now it's turning into a business?
+Your past use is totally fine. The license has a built-in 32-day grace period after any written notice, so there's plenty of runway.
+When you're ready, just reach out for a commercial license. Terms are reasonable and size-appropriate.
+
+### 🏗️ Larger company / commercial use?
+Let's talk. Contact [Alex Greenshpun](https://linkedin.com/in/alexgreensh) or me@alexgreenshpun.com.
+
+---
 
 Created by [Alex Greenshpun](https://linkedin.com/in/alexgreensh).

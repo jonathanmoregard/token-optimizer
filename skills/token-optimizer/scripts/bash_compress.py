@@ -15,10 +15,13 @@ Security:
 - Partial output on timeout is NEVER compressed
 """
 
+import json
+import os
 import re
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Token/credential preservation patterns (scanned PRE-compression)
@@ -901,8 +904,65 @@ def _detect_pattern(command_str):
         return "list"
     elif cmd == "brew" and subcmd == "list":
         return "list"
+    elif cmd == "sqlite3":
+        return "sqlite3"
+    elif cmd in ("wc", "du", "df"):
+        return "disk_stats"
+    elif cmd == "printenv":
+        return "list"
+    elif cmd == "docker" and subcmd in ("exec", "logs", "inspect"):
+        if subcmd == "logs":
+            return "logs"
+        return "docker_output"
+    elif cmd == "kubectl" and subcmd in ("get", "describe", "logs"):
+        if subcmd == "logs":
+            return "logs"
+        return "list"
 
     return None
+
+
+def _compress_sqlite3(output):
+    """Compress sqlite3 query output: truncate large result sets."""
+    lines = output.strip().splitlines()
+    if len(lines) < 30:
+        return output
+    header = lines[:2]
+    data = lines[2:22]
+    result = header + data
+    result.append(f"... ({len(lines) - 22} more rows, {len(lines)} total)")
+    return "\n".join(result)
+
+
+def _compress_disk_stats(output):
+    """Compress du/df/wc output: keep header + totals."""
+    lines = output.strip().splitlines()
+    if len(lines) < 20:
+        return output
+    head = lines[:3]
+    tail = lines[-5:]
+    kept = len(head) + len(tail)
+    result = head
+    result.append(f"... ({len(lines) - kept} entries omitted)")
+    result.extend(tail)
+    return "\n".join(result)
+
+
+def _compress_docker_output(output):
+    """Compress docker exec/logs/inspect output."""
+    stripped = output.strip()
+    if stripped.startswith("[") or stripped.startswith("{"):
+        try:
+            data = json.loads(stripped[:200_000])
+            if isinstance(data, list) and len(data) > 0:
+                first_preview = json.dumps(data[0], indent=2)[:500]
+                return f"[{len(data)} items, first:\n{first_preview}\n...]"
+            elif isinstance(data, dict):
+                keys = list(data.keys())[:10]
+                return f"Object with {len(data)} keys: {', '.join(keys)}"
+        except (json.JSONDecodeError, RecursionError, TypeError):
+            pass
+    return _compress_logs(output)
 
 
 _PATTERN_HANDLERS = {
@@ -919,6 +979,29 @@ _PATTERN_HANDLERS = {
     "progress": _compress_progress,
     "list": _compress_list,
     "build": _compress_build,
+    "sqlite3": _compress_sqlite3,
+    "disk_stats": _compress_disk_stats,
+    "docker_output": _compress_docker_output,
+}
+
+# Maps _detect_pattern() output to the feature name stored in compression_events.
+_COMPRESS_FEATURE_MAP = {
+    "git_status": "bash_compress_git",
+    "git_log": "bash_compress_git",
+    "git_diff": "bash_compress_git",
+    "pytest": "bash_compress_pytest",
+    "jest": "bash_compress_jest",
+    "npm_install": "bash_compress_npm",
+    "ls": "bash_compress_ls",
+    "lint": "bash_compress_lint",
+    "logs": "bash_compress_logs",
+    "tree": "bash_compress_tree",
+    "progress": "bash_compress_progress",
+    "list": "bash_compress_list",
+    "build": "bash_compress_build",
+    "sqlite3": "bash_compress_build",
+    "disk_stats": "bash_compress_list",
+    "docker_output": "bash_compress_build",
 }
 
 
@@ -1029,6 +1112,28 @@ def main():
             returncode=result.returncode,
             stderr=stderr,
         )
+
+        # Record savings to trends.db if compression was meaningful
+        try:
+            orig_bytes = len(raw_output.encode("utf-8", errors="replace"))
+            comp_bytes = len(compressed.encode("utf-8", errors="replace"))
+            if comp_bytes < orig_bytes * 0.9:
+                _pattern = _detect_pattern(command_str)
+                _feature = _COMPRESS_FEATURE_MAP.get(_pattern or "")
+                if _feature:
+                    sys.path.insert(0, str(Path(__file__).resolve().parent))
+                    from measure import _log_compression_event
+                    _log_compression_event(
+                        feature=_feature,
+                        original_text=raw_output,
+                        compressed_text=compressed,
+                        session_id=os.environ.get("CLAUDE_SESSION_ID", ""),
+                        command_pattern=command_str[:100],
+                        quality_preserved=True,
+                        verified=True,
+                    )
+        except Exception:
+            pass
 
         # Buffer completely, then write
         sys.stdout.write(compressed)

@@ -30,6 +30,14 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Optional
 
+from plugin_env import is_v5_flag_enabled, resolve_snapshot_dir
+
+try:
+    from session_store import SessionStore, cleanup_old_stores
+except ImportError:
+    SessionStore = None  # type: ignore[assignment,misc]
+    cleanup_old_stores = None  # type: ignore[assignment]
+
 from structure_map import (
     StructureMapResult,
     detect_structure_language,
@@ -39,58 +47,31 @@ from structure_map import (
 
 
 def _is_v5_delta_enabled():
-    """Check if delta mode is enabled. Env var > config.json > default (True in v5.1)."""
-    env_val = os.environ.get("TOKEN_OPTIMIZER_READ_CACHE_DELTA")
-    if env_val is not None:
-        return env_val == "1"
-    # Read config.json directly to avoid importing measure.py in hot path
-    try:
-        config_dir = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".claude" / "token-optimizer"))) / "config"
-        if not config_dir.exists():
-            config_dir = Path.home() / ".claude" / "token-optimizer"
-        config_path = config_dir / "config.json"
-        if config_path.exists():
-            cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            if isinstance(cfg, dict) and "v5_delta_mode" in cfg:
-                return bool(cfg["v5_delta_mode"])
-    except (json.JSONDecodeError, OSError):
-        pass
-    return True  # Default: ON in v5.1
+    """Check if delta mode is enabled. Default ON in v5.1."""
+    return is_v5_flag_enabled("v5_delta_mode", "TOKEN_OPTIMIZER_READ_CACHE_DELTA", default=True)
 
 
 def _is_v5_structure_map_beta():
     """Check if structure map beta telemetry is enabled."""
-    env_val = os.environ.get("TOKEN_OPTIMIZER_STRUCTURE_MAP")
-    if env_val is not None:
-        return env_val == "beta"
-    try:
-        config_dir = Path(os.environ.get("CLAUDE_PLUGIN_DATA", str(Path.home() / ".claude" / "token-optimizer"))) / "config"
-        if not config_dir.exists():
-            config_dir = Path.home() / ".claude" / "token-optimizer"
-        config_path = config_dir / "config.json"
-        if config_path.exists():
-            cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            if isinstance(cfg, dict) and "v5_structure_map_beta" in cfg:
-                return bool(cfg["v5_structure_map_beta"])
-    except (json.JSONDecodeError, OSError):
-        pass
-    return False
+    return is_v5_flag_enabled(
+        "v5_structure_map_beta",
+        "TOKEN_OPTIMIZER_STRUCTURE_MAP",
+        default=False,
+        env_truthy_value="beta",
+    )
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-_PLUGIN_DATA = os.environ.get("CLAUDE_PLUGIN_DATA")
-SNAPSHOT_DIR = Path(_PLUGIN_DATA) / "data" if _PLUGIN_DATA else Path.home() / ".claude" / "_backups" / "token-optimizer"
+SNAPSHOT_DIR = resolve_snapshot_dir()
 CACHE_DIR = SNAPSHOT_DIR / "read-cache"
 TRENDS_DB = SNAPSHOT_DIR / "trends.db"
-MAX_CACHE_ENTRIES = 500
 MAX_CONTEXTIGNORE_PATTERNS = 200
 READ_CACHE_MODES = frozenset({"shadow", "warn", "soft_block", "block"})
 DEFAULT_MODE = "soft_block"
 
-MIN_STRUCTURE_CONFIDENCE = 0.84
-REMINDER_TOKENS_EST = 20
+MIN_STRUCTURE_CONFIDENCE = 0.75
 REASON_ONLY_TOKENS_EST = 10
 STRICT_CONTEXT_CAPS = {
     "signatures": 350,
@@ -98,7 +79,7 @@ STRICT_CONTEXT_CAPS = {
     "skeleton": 850,
     "digest": 500,
 }
-MAX_ADDITIONAL_CONTEXT_CHARS = 1500
+MAX_ADDITIONAL_CONTEXT_CHARS = 2600
 STRICT_ADDITIONAL_CONTEXT_CHARS = 1000
 
 # All binary extensions (early-return path). Token-cost warnings use the
@@ -171,6 +152,15 @@ def _is_contextignored(file_path: str) -> bool:
 # Cache operations
 # ---------------------------------------------------------------------------
 
+def _make_store(session_id: str) -> Optional["SessionStore"]:
+    if SessionStore is None:
+        return None
+    try:
+        return SessionStore(session_id)
+    except Exception:
+        return None
+
+
 def _cache_path(session_id: str) -> Path:
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "", session_id) or "unknown"
     return CACHE_DIR / f"{safe_id}.json"
@@ -182,39 +172,6 @@ def _decisions_log_path(session_id: str = "unknown") -> Path:
     decisions_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     return decisions_dir / f"{safe_id}.jsonl"
 
-
-def _load_cache(session_id: str) -> dict[str, Any]:
-    cp = _cache_path(session_id)
-    if not cp.exists():
-        return {"files": {}}
-    try:
-        data = json.loads(cp.read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or "files" not in data:
-            raise ValueError("invalid cache structure")
-        return data
-    except (json.JSONDecodeError, ValueError, OSError):
-        try:
-            cp.unlink()
-        except OSError:
-            pass
-        return {"files": {}}
-
-
-def _save_cache(session_id: str, cache: dict[str, Any]) -> None:
-    files = cache.get("files", {})
-    if len(files) > MAX_CACHE_ENTRIES:
-        sorted_entries = sorted(files.items(), key=lambda item: item[1].get("last_access", 0))
-        to_remove = len(files) - MAX_CACHE_ENTRIES
-        for key, _ in sorted_entries[:to_remove]:
-            del files[key]
-
-    CACHE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    cp = _cache_path(session_id)
-    tmp = cp.with_suffix(f".{os.getpid()}.{time.time_ns()}.tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(cache, handle)
-    os.replace(tmp, cp)
 
 
 def _reset_replacement_state(entry: dict[str, Any]) -> None:
@@ -228,8 +185,6 @@ def _reset_replacement_state(entry: dict[str, Any]) -> None:
 def _ensure_entry_defaults(entry: dict[str, Any]) -> None:
     entry.setdefault("mtime_ns", 0)
     entry.setdefault("size_bytes", 0)
-    entry.setdefault("offset", 0)
-    entry.setdefault("limit", 0)
     entry.setdefault("tokens_est", 0)
     entry.setdefault("read_count", 0)
     entry.setdefault("last_access", 0.0)
@@ -238,6 +193,10 @@ def _ensure_entry_defaults(entry: dict[str, Any]) -> None:
     entry["repeat_replacement_count"] = int(entry.get("repeat_replacement_count", 0) or 0)
     entry["last_structure_reason"] = entry.get("last_structure_reason", "")
     entry["last_structure_confidence"] = float(entry.get("last_structure_confidence", 0.0) or 0.0)
+    if "ranges_seen" not in entry:
+        old_off = int(entry.get("offset", 0) or 0)
+        old_lim = int(entry.get("limit", 0) or 0)
+        entry["ranges_seen"] = [[old_off, old_lim]]
 
 
 def _log_decision(
@@ -257,10 +216,8 @@ def _log_decision(
     entry.update(extra)
     log_path = _decisions_log_path(session_id)
     try:
-        if not log_path.exists():
-            fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            os.close(fd)
-        with open(log_path, "a", encoding="utf-8") as handle:
+        fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
     except OSError:
         pass
@@ -297,24 +254,11 @@ def _build_structure_message(
 ) -> str:
     return "\n".join(
         [
-            f"[Token Optimizer] {Path(file_path).name} is unchanged and was already read in this session.",
-            f"Using {summary.replacement_type} view to avoid ~{net_saved_tokens_est:,} tokens.",
-            "If you truly need the full body, edit the file or request a narrower range.",
+            f"[Token Optimizer] {Path(file_path).name} is unchanged (already read this session).",
+            f"Using {summary.replacement_type} view. Edit the file or request a specific range for full content.",
             "",
             summary.replacement_text,
         ]
-    )
-
-
-def _build_repeat_reminder(
-    file_path: str,
-    replacement_type: str,
-    net_saved_tokens_est: int,
-) -> str:
-    return (
-        f"[Token Optimizer] {Path(file_path).name} is still unchanged and already summarized as "
-        f"{replacement_type}. Reusing that code map avoids ~{net_saved_tokens_est:,} tokens. "
-        "Request a narrower range or reread after the file changes if you need more detail."
     )
 
 
@@ -532,9 +476,13 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
             _emit_pretool_response(None, None, context_msg)
         return
 
-    cache = _load_cache(session_id)
-    files = cache.get("files", {})
-    entry = files.get(file_path)
+    store = _make_store(session_id)
+    if store is None:
+        return
+    try:
+        entry = store.get_file_entry(file_path)
+    except Exception:
+        return
 
     if entry is None:
         try:
@@ -546,13 +494,11 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
         entry = {
             "mtime_ns": stat.st_mtime_ns,
             "size_bytes": stat.st_size,
-            "offset": offset,
-            "limit": limit,
+            "ranges_seen": [[offset, limit]],
             "tokens_est": tokens_est,
             "read_count": 1,
             "last_access": time.time(),
         }
-        # v5.0: Cache content for delta diffs on first whole-file read
         if _is_v5_delta_enabled() and offset == 0 and limit == 0:
             try:
                 from delta_diff import is_delta_eligible, content_hash, MAX_CONTENT_CACHE_BYTES
@@ -561,12 +507,11 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
                     if len(fc.encode("utf-8", errors="replace")) <= MAX_CONTENT_CACHE_BYTES:
                         entry["cached_content"] = fc
                         entry["content_hash"] = content_hash(fc)
+                        store.upsert_cached_content(file_path, fc, content_hash(fc))
             except Exception:
                 pass
         _reset_replacement_state(entry)
-        files[file_path] = entry
-        cache["files"] = files
-        _save_cache(session_id, cache)
+        store.upsert_file_entry(file_path, entry)
         _log_decision(
             "allow",
             file_path,
@@ -594,9 +539,7 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
     try:
         current_stat = os.stat(file_path)
     except OSError:
-        del files[file_path]
-        cache["files"] = files
-        _save_cache(session_id, cache)
+        store.delete_file_entry(file_path)
         _log_decision(
             "allow",
             file_path,
@@ -621,40 +564,57 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
 
     mtime_match = int(entry.get("mtime_ns", 0) or 0) == current_stat.st_mtime_ns
     size_match = int(entry.get("size_bytes", 0) or 0) == current_stat.st_size
-    range_match = (int(entry.get("offset", 0) or 0) == offset and int(entry.get("limit", 0) or 0) == limit)
 
-    if not (mtime_match and size_match and range_match):
+    ranges_seen = entry.get("ranges_seen", [])
+    if not ranges_seen:
+        old_off = int(entry.get("offset", 0) or 0)
+        old_lim = int(entry.get("limit", 0) or 0)
+        ranges_seen = [[old_off, old_lim]]
+
+    range_covered = False
+    for cached_off, cached_lim in ranges_seen:
+        if cached_off == 0 and cached_lim == 0:
+            range_covered = True
+            break
+        if offset >= cached_off:
+            if cached_lim == 0:
+                range_covered = True
+                break
+            if limit > 0 and (offset + limit) <= (cached_off + cached_lim):
+                range_covered = True
+                break
+
+    if not (mtime_match and size_match and range_covered):
         # v5.0: Delta mode -- return diff instead of allowing full re-read
         delta_enabled = _is_v5_delta_enabled()
+        cached = store.get_cached_content(file_path) if delta_enabled else None
+        old_content = cached.get("content") if cached else entry.get("cached_content")
+        old_hash = cached.get("content_hash") if cached else entry.get("content_hash")
         if (
             delta_enabled
             and offset == 0
             and limit == 0
             and not mtime_match
-            and entry.get("content_hash")
-            and entry.get("cached_content")
+            and old_hash
+            and old_content
         ):
             try:
                 from delta_diff import compute_delta, content_hash, is_delta_eligible, MAX_CONTENT_CACHE_BYTES
                 if is_delta_eligible(file_path):
                     new_content = Path(file_path).read_text(encoding="utf-8", errors="replace")
                     new_hash = content_hash(new_content)
-                    if new_hash != entry.get("content_hash"):
-                        old_content = entry.get("cached_content", "")
+                    if new_hash != old_hash:
                         delta_text, delta_stats = compute_delta(old_content, new_content, Path(file_path).name)
                         if delta_text is not None:
-                            # Update cache with new content
                             entry["mtime_ns"] = current_stat.st_mtime_ns
                             entry["size_bytes"] = current_stat.st_size
                             entry["content_hash"] = new_hash
-                            if len(new_content.encode("utf-8", errors="replace")) <= MAX_CONTENT_CACHE_BYTES:
-                                entry["cached_content"] = new_content
-                            else:
-                                entry.pop("cached_content", None)
                             entry["read_count"] = int(entry.get("read_count", 0) or 0) + 1
                             entry["last_access"] = time.time()
                             _reset_replacement_state(entry)
-                            _save_cache(session_id, cache)
+                            store.upsert_file_entry(file_path, entry)
+                            if len(new_content.encode("utf-8", errors="replace")) <= MAX_CONTENT_CACHE_BYTES:
+                                store.upsert_cached_content(file_path, new_content, new_hash)
 
                             old_tokens = max(1, current_stat.st_size // 4)
                             delta_tokens = len(delta_text.encode("utf-8", errors="replace")) // 4
@@ -717,15 +677,20 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
             except Exception:
                 pass  # Fail open: fall through to normal allow
 
-        # Normal path: file modified, allow full re-read
+        file_changed = not (mtime_match and size_match)
+        reason_code_allow = "file_modified" if file_changed else "new_range"
         entry["mtime_ns"] = current_stat.st_mtime_ns
         entry["size_bytes"] = current_stat.st_size
-        entry["offset"] = offset
-        entry["limit"] = limit
+        if file_changed:
+            entry["ranges_seen"] = [[offset, limit]]
+        else:
+            ranges_seen.append([offset, limit])
+            if len(ranges_seen) > 20:
+                ranges_seen = ranges_seen[-20:]
+            entry["ranges_seen"] = ranges_seen
         entry["tokens_est"] = max(1, current_stat.st_size // 4) if current_stat.st_size else 0
         entry["read_count"] = int(entry.get("read_count", 0) or 0) + 1
         entry["last_access"] = time.time()
-        # Cache content for future delta diffs (v5.0) - only whole-file reads
         if delta_enabled and offset == 0 and limit == 0 and not entry.get("cached_content"):
             try:
                 from delta_diff import is_delta_eligible, content_hash, MAX_CONTENT_CACHE_BYTES
@@ -734,20 +699,21 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
                     if len(fc.encode("utf-8", errors="replace")) <= MAX_CONTENT_CACHE_BYTES:
                         entry["cached_content"] = fc
                         entry["content_hash"] = content_hash(fc)
+                        store.upsert_cached_content(file_path, fc, content_hash(fc))
             except Exception:
                 pass
         _reset_replacement_state(entry)
-        _save_cache(session_id, cache)
+        store.upsert_file_entry(file_path, entry)
         _log_decision(
             "allow",
             file_path,
-            "file_modified_or_different_range",
+            reason_code_allow,
             session_id,
             mode=mode,
             actual_substitution=False,
             eligible=False,
             language=language,
-            reason_code="file_modified_or_different_range",
+            reason_code=reason_code_allow,
             offset=offset,
             limit=limit,
             replacement_type=None,
@@ -779,7 +745,7 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
         decision = "warn" if mode == "warn" else "allow"
         entry["last_structure_reason"] = reason_code
         entry["last_structure_confidence"] = summary.confidence if summary else 0.0
-        _save_cache(session_id, cache)
+        store.upsert_file_entry(file_path, entry)
         _log_decision(
             decision,
             file_path,
@@ -813,7 +779,7 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
         entry["repeat_replacement_count"] = repeat_count
         entry["last_structure_reason"] = reason_code
         entry["last_structure_confidence"] = summary.confidence
-        _save_cache(session_id, cache)
+        store.upsert_file_entry(file_path, entry)
 
         if repeat_count == 1:
             replacement_tokens_est = summary.replacement_tokens_est
@@ -823,35 +789,20 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
                 max(0, tokens_est - summary.replacement_tokens_est),
             )
             if not _additional_context_within_cap(additional_context, save_hook_context_enabled):
-                additional_context = _build_repeat_reminder(
-                    file_path,
-                    summary.replacement_type,
-                    max(0, tokens_est - REMINDER_TOKENS_EST),
-                )
-                replacement_tokens_est = REMINDER_TOKENS_EST
-        elif repeat_count == 2:
-            additional_context = _build_repeat_reminder(
-                file_path,
-                summary.replacement_type,
-                max(0, tokens_est - REMINDER_TOKENS_EST),
-            )
-            replacement_tokens_est = REMINDER_TOKENS_EST
+                additional_context = None
+                replacement_tokens_est = REASON_ONLY_TOKENS_EST
         else:
             additional_context = None
             replacement_tokens_est = REASON_ONLY_TOKENS_EST
 
         net_saved_tokens_est = max(0, tokens_est - replacement_tokens_est)
-        reason = _build_reason_only_message(file_path)
         if repeat_count == 1:
             reason = (
                 f"{Path(file_path).name} is unchanged and already in context; "
-                f"using {summary.replacement_type} code map instead."
+                f"using {summary.replacement_type} view."
             )
-        elif repeat_count == 2:
-            reason = (
-                f"{Path(file_path).name} is unchanged and already summarized; "
-                "reusing prior structure map."
-            )
+        else:
+            reason = _build_reason_only_message(file_path)
 
         _log_decision(
             "block",
@@ -908,7 +859,7 @@ def handle_read(hook_input: dict[str, Any], mode: str, quiet: bool) -> None:
         return
 
     if mode == "block":
-        _save_cache(session_id, cache)
+        store.upsert_file_entry(file_path, entry)
         _log_decision(
             "block",
             file_path,
@@ -942,6 +893,8 @@ def handle_clear(session_id: str, quiet: bool) -> None:
     """Clear read cache for a session."""
 
     if session_id and session_id != "all":
+        store = _make_store(session_id)
+        store.clear_file_entries()
         cp = _cache_path(session_id)
         if cp.exists():
             cp.unlink()
@@ -968,8 +921,10 @@ def handle_clear(session_id: str, quiet: bool) -> None:
                     candidate.unlink()
                 except OSError:
                     pass
+        deleted = cleanup_old_stores()
         if not quiet:
-            print("[Read Cache] Cleared all caches", file=sys.stderr)
+            extra = f", pruned {deleted} old session stores" if deleted else ""
+            print(f"[Read Cache] Cleared all caches{extra}", file=sys.stderr)
 
 
 def handle_invalidate(hook_input: dict[str, Any], quiet: bool) -> None:
@@ -986,22 +941,26 @@ def handle_invalidate(hook_input: dict[str, Any], quiet: bool) -> None:
 
     file_path = str(Path(raw_path).resolve())
     session_id = str(hook_input.get("agent_id") or hook_input.get("session_id") or "unknown")
-    cache = _load_cache(session_id)
-    files = cache.get("files", {})
+    store = _make_store(session_id)
+    if store is None:
+        return
 
-    if file_path in files:
-        del files[file_path]
-        cache["files"] = files
-        _save_cache(session_id, cache)
-        if not quiet:
-            print(f"[Read Cache] Invalidated: {file_path}", file=sys.stderr)
+    try:
+        existing = store.get_file_entry(file_path)
+        if existing is not None:
+            store.delete_file_entry(file_path)
+            store.delete_cached_content(file_path)
+            if not quiet:
+                print(f"[Read Cache] Invalidated: {file_path}", file=sys.stderr)
+    except Exception:
+        pass
 
 
 def handle_stats(session_id: str) -> None:
     """Print cache stats for a session."""
 
-    cache = _load_cache(session_id)
-    files = cache.get("files", {})
+    store = _make_store(session_id)
+    files = store.get_all_file_entries()
     total_reads = sum(int(entry.get("read_count", 0) or 0) for entry in files.values())
     total_tokens = sum(int(entry.get("tokens_est", 0) or 0) for entry in files.values())
 

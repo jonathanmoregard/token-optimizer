@@ -5,9 +5,9 @@
  * Mirrors the Python Token Optimizer v5 feature catalog so both plugins
  * speak the same feature identifiers when writing telemetry. Low-risk
  * features (delta read, structure map beta) ship ON by default; higher-risk
- * features stay opt-in. Bash Output Compression is deferred in OpenClaw
- * v2.3.0 because the current OpenClaw plugin API does not expose a
- * tool-result mutation hook — tracked externally.
+ * features stay opt-in. Bash Output Compression, Quality Nudges, and
+ * Loop Detection are deferred because the current OpenClaw plugin API
+ * does not expose tool-input mutation or session notification hooks.
  *
  * Toggle state is persisted to `~/.openclaw/token-optimizer/v5-features.json`
  * so a gateway restart preserves user choices.
@@ -78,7 +78,9 @@ exports.V5_FEATURES = {
         description: "Surface a short hint to the session when the quality signal drops sharply between two scored turns.",
         defaultEnabled: false,
         risk: "medium",
-        status: "shipped",
+        // Deferred: OpenClaw's plugin API does not expose a session-visible
+        // notification surface for inline context injection.
+        status: "deferred",
     },
     loop_detection: {
         id: "loop_detection",
@@ -86,7 +88,8 @@ exports.V5_FEATURES = {
         description: "Flag when the same tool call is repeating with the same arguments inside a single turn.",
         defaultEnabled: false,
         risk: "medium",
-        status: "shipped",
+        // Deferred: requires the same notification surface as quality_nudge.
+        status: "deferred",
     },
     bash_compression: {
         id: "bash_compression",

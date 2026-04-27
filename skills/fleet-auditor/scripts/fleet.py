@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations  # PEP 604 union syntax compat for Python 3.9
 """Fleet Auditor: Cross-Platform Agent Token Waste Auditor.
 
 Detects agent systems (Claude Code, OpenClaw, NanoClaw, Hermes, OpenCode, IronClaw),
@@ -15,14 +14,14 @@ Usage:
     python3 fleet.py report [--system X] [--json]   # Full report with $ savings
     python3 fleet.py dashboard [--serve]             # Generate fleet dashboard
 """
+from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -32,7 +31,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
-from shared import (
+from shared import (  # noqa: E402 — must follow sys.path.insert above
     HOME,
     CLAUDE_DIR,
     normalize_model_name,
@@ -42,7 +41,6 @@ from shared import (
     find_subagent_jsonl_files,
     clean_project_name,
     init_sqlite_db,
-    migrate_add_columns,
     estimate_tokens_from_file,
     estimate_tokens_from_text,
 )
@@ -810,7 +808,7 @@ class SkillBloat(BaseDetector):
             description=f"{len(skills)} skills loaded ({total_skill_tokens:,} tokens overhead per API call)",
             monthly_waste_usd=monthly_cost,
             monthly_waste_tokens=monthly_waste,
-            recommendation=f"Archive unused skills. Each removed skill saves ~100 tokens per API call across all sessions.",
+            recommendation="Archive unused skills. Each removed skill saves ~100 tokens per API call across all sessions.",
             fix_snippet="# Move unused skills out of ~/.claude/skills/\n# Check which skills you actually use:\n# python3 measure.py trends --days 30",
             evidence={"skill_count": len(skills), "skill_names": [s.get("name", "?") for s in skills]},
         )]
@@ -935,6 +933,80 @@ class StaleCronConfig(BaseDetector):
                                     recommendation="Remove or fix the hook referencing a dead path.",
                                     evidence={"hook": hook_name, "command": cmd, "missing_path": part},
                                 ))
+        return findings
+
+
+class BlockingHookDetector(BaseDetector):
+    """Detect Stop hooks that re-invoke the model via decision:block on every turn."""
+    name = "blocking_hook"
+    tier = 1
+    description = "Stop hook re-invokes model every turn via decision:block"
+
+    def detect(self, runs: list[AgentRun], config: dict, system: str) -> list[WasteFinding]:
+        hooks = config.get("hooks", {})
+        if not hooks:
+            return []
+
+        findings = []
+        for hook_name, hook_list in hooks.items():
+            if not isinstance(hook_list, list):
+                continue
+            for entry in hook_list:
+                # Handle both flat {command: ...} and nested {hooks: [{command: ...}]}
+                cmds_to_check = []
+                if isinstance(entry, dict):
+                    if "command" in entry:
+                        cmds_to_check.append(entry["command"])
+                    for inner in entry.get("hooks", []):
+                        if isinstance(inner, dict):
+                            cmds_to_check.append(inner.get("command", ""))
+
+                for cmd in cmds_to_check:
+                    if not cmd:
+                        continue
+                    if '"decision"' in cmd and '"block"' in cmd:
+                        recent_runs = [r for r in runs
+                                       if (datetime.now(timezone.utc) - r.timestamp).days <= 30]
+                        avg_turns = (sum(r.message_count for r in recent_runs) / max(len(recent_runs), 1)
+                                     if recent_runs else 20)
+                        est_per_turn_tokens = 80
+                        est_monthly_cost = 0.0
+                        if recent_runs:
+                            days = max(1, len({r.timestamp.strftime("%Y-%m-%d") for r in recent_runs}))
+                            sessions_per_month = (len(recent_runs) / days) * 30
+                            est_monthly_tokens = sessions_per_month * avg_turns * est_per_turn_tokens
+                            est_monthly_cost = est_monthly_tokens * 3.0 / 1_000_000
+
+                        findings.append(WasteFinding(
+                            system=system,
+                            waste_type=self.name,
+                            tier=self.tier,
+                            severity="medium" if est_monthly_cost > 1.0 else "low",
+                            confidence=0.8,
+                            description=(
+                                f"{hook_name} hook uses decision:block, re-invoking the model "
+                                f"on every turn (~{est_per_turn_tokens} tok/turn, "
+                                f"~{avg_turns:.0f} turns/session)"
+                            ),
+                            recommendation=(
+                                f"Remove the decision:block pattern from the {hook_name} hook. "
+                                "Use additionalContext injection instead of blocking+re-invoking."
+                            ),
+                            evidence={"hook_event": hook_name, "command_preview": cmd[:100]},
+                            monthly_waste_tokens=int(est_monthly_cost / 3.0 * 1_000_000),
+                            monthly_waste_usd=round(est_monthly_cost, 2),
+                        ))
+                    if any(kw in cmd for kw in ("curl ", " anthropic", " openai", " gemini")):
+                        findings.append(WasteFinding(
+                            system=system,
+                            waste_type="heavyweight_hook",
+                            tier=self.tier,
+                            severity="low",
+                            confidence=0.6,
+                            description=f"{hook_name} hook calls external API on every invocation",
+                            recommendation="Consider caching API responses or moving to an async pattern.",
+                            evidence={"hook_event": hook_name, "command_preview": cmd[:80]},
+                        ))
         return findings
 
 
@@ -1165,6 +1237,7 @@ DETECTOR_REGISTRY: list[type[BaseDetector]] = [
     # Tier 1: Static Config
     HeartbeatModelWaste,
     HeartbeatOverFrequency,
+    BlockingHookDetector,
     SkillBloat,
     ToolDefinitionBloat,
     MemoryConfigOverhead,
@@ -1413,8 +1486,6 @@ def cmd_audit(args: list[str]):
     total_monthly_waste = sum(f.monthly_waste_usd for f in all_findings)
 
     for i, f in enumerate(all_findings, 1):
-        sev_marker = {"critical": "!!!", "high": "!!", "medium": "!", "low": "."}
-        marker = sev_marker.get(f.severity, "")
         print(f"\n  {i}. [{f.severity.upper():8s}] {f.description}")
         print(f"     System: {f.system} | Tier {f.tier} | Confidence: {f.confidence:.0%}")
         if f.monthly_waste_usd > 0:
@@ -1551,7 +1622,7 @@ def cmd_report(args: list[str]):
     if waste_rows:
         total_waste = sum((wr[4] or 0) for wr in waste_rows)
         print(f"\n  Waste detected: ${total_waste:.2f}/month potential savings")
-        print(f"  Run 'fleet.py audit' for detailed recommendations.")
+        print("  Run 'fleet.py audit' for detailed recommendations.")
     print()
 
 
@@ -1680,9 +1751,6 @@ def _generate_dashboard_html(daily_rows, waste_rows, system_stats, model_mix, to
     # Daily chart data as JSON
     daily_json = json.dumps(daily_data)
     model_json = json.dumps(model_data)
-    project_json = json.dumps(project_data)
-    waste_json = json.dumps(waste_data)
-    generated_at = datetime.now(timezone.utc).isoformat()
 
     # Build system cards
     sys_html = ""

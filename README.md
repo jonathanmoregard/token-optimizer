@@ -3,9 +3,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.6.2-green" alt="Version 5.6.2"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-5.6.4-green" alt="Version 5.6.4"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
-  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.4.0-brightgreen" alt="OpenClaw v2.4.0"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-v2.4.1-brightgreen" alt="OpenClaw v2.4.1"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/blob/main/docs/codex-beta.md"><img src="https://img.shields.io/badge/Codex-v0.1.0--beta-orange" alt="Codex v0.1.0-beta"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg" alt="License: PolyForm Noncommercial"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/stargazers"><img src="https://img.shields.io/github/stars/alexgreensh/token-optimizer" alt="GitHub Stars"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/commits/main"><img src="https://img.shields.io/github/last-commit/alexgreensh/token-optimizer" alt="Last Commit"></a>
@@ -31,7 +32,7 @@ They compress command output, which covers 15-25% of your context on a good day.
 Token Optimizer covers all of it, keeps your work alive across compactions, measures whether the optimization actually helped, and gives you a <strong>live dashboard</strong> that shows every token, every dollar, and every turn, auto-updated after every session. Runs fully local. Zero context tokens used. Zero runtime dependencies.
 </p>
 <p align="center">
-Works on <strong>Claude Code</strong> and <strong>OpenClaw</strong> today. Windsurf, Cursor, and more on the way.
+Works on <strong>Claude Code</strong>, <strong>OpenClaw</strong>, and <strong>Codex</strong> (beta) today. Windsurf, Cursor, and more on the way.
 </p>
 
 <p align="center">
@@ -86,6 +87,51 @@ Works on Claude Code and [OpenClaw](#openclaw-plugin). Each platform has its own
 
 </details>
 
+<details>
+<summary><h3>Codex (beta)</h3></summary>
+
+Token Optimizer works on OpenAI Codex (CLI and Desktop). Same core engine, adapted for AGENTS.md, GPT-5.x models, and Codex's hook surface. This is a **beta** -- core audit, coaching, dashboard, and fleet scanning work. Some advanced features (Delta Mode, Structure Map, invisible Bash compression) are waiting on upstream Codex hook parity.
+
+```bash
+codex plugin marketplace add alexgreensh/token-optimizer
+```
+
+Then in the Codex TUI: `/plugins` and install Token Optimizer. Ask for it conversationally: "Run Token Optimizer".
+
+After install, set up hooks and the bookmarkable dashboard:
+
+```bash
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py codex-install --project "$PWD"
+TOKEN_OPTIMIZER_RUNTIME=codex python3 skills/token-optimizer/scripts/measure.py setup-daemon
+```
+
+Dashboard: `http://localhost:24843/token-optimizer` (separate port from Claude Code's 24842, both can run side by side).
+
+Auto-updates on startup via `git ls-remote`. Manual: `codex plugin marketplace upgrade`.
+
+See [`docs/codex-beta.md`](docs/codex-beta.md) for the full feature parity table, hook profiles, and Codex model pricing.
+
+</details>
+
+<details>
+<summary><h3>OpenClaw</h3></summary>
+
+Native TypeScript plugin for OpenClaw agent systems. Zero Python dependency, zero runtime dependencies, zero telemetry. Works with any model your gateway is configured against: Claude, GPT-5, Gemini, DeepSeek, local via Ollama.
+
+```bash
+# From GitHub (recommended)
+openclaw plugins install github:alexgreensh/token-optimizer
+
+# From ClawHub
+openclaw plugins install token-optimizer
+```
+
+Inside OpenClaw, run `/token-optimizer` for a guided audit with coaching.
+
+See [`openclaw/README.md`](openclaw/README.md) for full docs.
+
+</details>
+
 ---
 
 ## Full Visibility: See Every Token, Every Dollar, Every Turn
@@ -136,7 +182,7 @@ Token Optimizer handles both. And because it also checkpoints your session befor
 
 ### Fully local, zero dependencies, zero telemetry
 
-Pure Python stdlib on Claude Code. Pure Node stdlib on OpenClaw. Nothing to `pip install`, nothing to `npm install` at runtime, no analytics endpoint, no phone-home. Every measurement is a local SQLite write to a file you own at `~/.claude/_backups/token-optimizer/trends.db`. You can inspect it, export it, or delete it.
+Pure Python stdlib on Claude Code and Codex. Pure Node stdlib on OpenClaw. Nothing to `pip install`, nothing to `npm install` at runtime, no analytics endpoint, no phone-home. Every measurement is a local SQLite write to a file you own under your runtime home, such as `~/.claude/_backups/token-optimizer/trends.db` or `~/.codex/_backups/token-optimizer/trends.db`. You can inspect it, export it, or delete it.
 
 ### Zero context tokens consumed
 
@@ -198,15 +244,15 @@ No. All hooks are non-blocking with fail-open design. If a Token Optimizer scrip
 <details>
 <summary>📦 <strong>Does it have any runtime dependencies?</strong></summary>
 
-No. Pure Python stdlib on Claude Code. Pure Node stdlib on OpenClaw. Nothing to `pip install`, nothing to `npm install` at runtime. What you clone is everything it needs.
+No. Pure Python stdlib on Claude Code and Codex. Pure Node stdlib on OpenClaw. Nothing to `pip install`, nothing to `npm install` at runtime. What you clone is everything it needs.
 </details>
 
 <details>
 <summary>🧰 <strong>Which platforms does it support?</strong></summary>
 
-Claude Code and OpenClaw today, with native plugins for each (Python for Claude Code, TypeScript for OpenClaw, no shared runtime, no cross-platform bridging).
+Claude Code and OpenClaw today, with native plugins for each. Codex support is in beta, with a Python adapter for chat-first status, coaching, dashboard refresh, and fleet scans.
 
-Windsurf and Cursor are next on the roadmap. Codex is waiting for the plugin API to stabilize.
+Windsurf and Cursor are next on the roadmap. Full Codex parity is waiting on upstream hook/cache surfaces for invisible read substitution, structure-map substitution, and compact lifecycle hooks.
 </details>
 
 ---
@@ -499,7 +545,7 @@ Token Optimizer is not just reactive. It's also proactive.
 
 Tell it your goal. Get back specific, prioritized fixes with exact token savings. Detects 8 named anti-patterns (The Kitchen Sink, The Hoarder, The Monolith, and more) and recommends multi-agent design patterns that actually save context.
 
-**Building a new project?** Run `/token-coach` before writing your first CLAUDE.md. Start with a clean, optimized setup instead of accumulating waste for months and fixing it later.
+**Building a new project?** Run `/token-coach` before writing your first `CLAUDE.md` or Codex `AGENTS.md`. Start with a clean, optimized setup instead of accumulating waste for months and fixing it later.
 
 ### Waste Detectors
 
@@ -521,7 +567,7 @@ Tell it your goal. Get back specific, prioritized fixes with exact token savings
 
 ### Fleet Auditor
 
-Managing multiple agent systems? Fleet Auditor scans across Claude Code, OpenClaw, and custom setups to find idle burns, model misrouting, and config bloat with dollar savings per finding. One command, one report, every ecosystem.
+Managing multiple agent systems? Fleet Auditor scans across Claude Code, Codex, OpenClaw, and custom setups to find idle burns, model misrouting, and config bloat with dollar savings per finding. One command, one report, every ecosystem.
 
 ### Subagent Cost Breakdown
 
@@ -591,7 +637,7 @@ Hover help on every column explains `Cache`, `TTL`, `Pacing`, `Cache R`, and `Ca
 | Zero context tokens consumed | Yes, external process | Adds ~200 tokens | MCP overhead | Injects instructions into context |
 | Zero runtime dependencies | Yes, pure stdlib | N/A | Varies | External binary |
 | Zero telemetry | Yes | Yes | Varies | Opt-out telemetry |
-| Works across platforms | Claude Code and OpenClaw (Windsurf and Cursor coming) | Claude Code only | Several platforms | Several platforms |
+| Works across platforms | Claude Code, Codex beta, and OpenClaw (Windsurf and Cursor coming) | Claude Code only | Several platforms | Several platforms |
 
 A few notes on the compression column: proxy tools quote big compression ratios on the commands they handle best, like `git status` or `tree`. Those numbers are real for those specific commands, but they cover only 15-25% of what you're actually burning. Everything else (configs, skills, memory, compaction loss) stays untouched. And most proxy compressors inject their own instructions into your context, which costs tokens on the way in.
 
@@ -740,42 +786,15 @@ Using Claude Code in the VS Code extension? Most of Token Optimizer works identi
 
 ---
 
-## OpenClaw Plugin
+## Other Platforms
 
-Native TypeScript plugin for OpenClaw agent systems. Zero Python dependency, zero runtime dependencies, zero telemetry. Works with any model your gateway is configured against: Claude, GPT-5, Gemini, DeepSeek, local via Ollama.
+### OpenClaw
 
-```bash
-# From GitHub (recommended)
-openclaw plugins install github:alexgreensh/token-optimizer
+Native TypeScript plugin with session audits, 10 waste detectors, coach mode, Smart Compaction, and interactive dashboard adapted for OpenClaw's architecture. Works with any model (Claude, GPT-5, Gemini, DeepSeek, local via Ollama). Install instructions in the [Install section above](#openclaw). Full docs: [`openclaw/README.md`](openclaw/README.md).
 
-# From ClawHub
-openclaw plugins install token-optimizer
+### Codex (Beta)
 
-# From source
-git clone https://github.com/alexgreensh/token-optimizer
-cd token-optimizer/openclaw && npm install && npm run build
-openclaw plugins install ./
-```
-
-Inside OpenClaw, run `/token-optimizer` for a guided audit with coaching.
-
-### What the OpenClaw plugin does
-
-**Session audits and cost tracking.** Parses your OpenClaw session data, calculates per-turn costs against your configured pricing (falls back to built-in rates for 20+ models), surfaces costly prompts, and ranks subagents by spend so you can see which orchestrator-worker pairs are actually pulling their weight.
-
-**10 waste detectors native to OpenClaw.** Idle burn detection, model misrouting, unused skills, retry churn, tool cascades, looping patterns, overpowered model use, weak model on complex tasks, wasteful thinking, and output token waste. Each finding comes with a dollar estimate.
-
-**Coach tab adapted for OpenClaw.** Scoring adapts to OpenClaw concepts (SOUL.md instead of CLAUDE.md, agent configs instead of hooks). Health score surfaces earned signals, neutral signals, and anti-patterns.
-
-**7-signal ContextQ tuned for OpenClaw's architecture.** Message Efficiency, Compression Opportunity, Model Routing, and related signals that match how OpenClaw actually runs, rather than a direct port of Claude Code's signals.
-
-**Smart Compaction.** Checkpoint and restore across compaction events, so your agent systems survive auto-compact the same way Claude Code sessions do.
-
-**Interactive HTML dashboard.** Same single-file, bookmarkable dashboard as on Claude Code, adapted to OpenClaw session data and agent topology.
-
-**Active Compression features**: v5 feature registry, Delta Mode (smart re-reads with proper offset/limit scoping), Structure Map Beta local-only measurement, plus the dashboard, CLI, and first-run welcome flow. Bash Output Compression, Quality Nudges, and Loop Detection are on the OpenClaw track pending upstream hook support.
-
-See [`openclaw/README.md`](openclaw/README.md) for full docs.
+Python adapter for OpenAI Codex (CLI and Desktop). Same core engine, adapted for AGENTS.md, GPT-5.x models, intelligence levels, and Codex's hook surface. Install instructions in the [Install section above](#codex-beta). Full docs with feature parity table, hook profiles, and model pricing: [`docs/codex-beta.md`](docs/codex-beta.md).
 
 ---
 
